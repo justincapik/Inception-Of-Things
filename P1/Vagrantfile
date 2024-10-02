@@ -1,0 +1,64 @@
+Vagrant.configure("2") do |config|
+
+  # Define the first machine (Server - Controller)
+  config.vm.define "jucapikS" do |server|
+    server.vm.box = "ubuntu/bionic64"  # Use your preferred OS
+    server.vm.hostname = "jucapikS"
+    
+    # Network configuration
+    server.vm.network "private_network", ip: "192.168.56.110"
+
+    # Resources configuration
+    server.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"  # More memory may be needed for k3s controller
+      vb.cpus = 1
+    end
+
+    # Provision the Server (Controller)
+    server.vm.provision "shell", inline: <<-SHELL
+      # Install k3s as the server (controller)
+      curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --flannel-iface=enp0s8" sh -
+    SHELL
+
+    # Share the node token file with the worker node by copying it to a shared folder
+    server.vm.provision "shell", inline: <<-SHELL
+      mkdir -p /vagrant/shared
+      cp /var/lib/rancher/k3s/server/node-token /vagrant/shared/
+    SHELL
+  end
+
+  # Define the second machine (ServerWorker - Agent)
+  config.vm.define "jucapikSW" do |worker|
+    worker.vm.box = "ubuntu/bionic64"  # Use your preferred OS
+    worker.vm.hostname = "jucapikSW"
+
+    # Network configuration
+    worker.vm.network "private_network", ip: "192.168.56.111"
+
+    # Resources configuration
+    worker.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"  # More memory may be needed for k3s worker
+      vb.cpus = 1
+    end
+
+    # Provision the Worker (Agent)
+    worker.vm.provision "shell", inline: <<-SHELL
+      # Wait for the server (controller) to be ready
+      sleep 30
+
+      # Read the token from the shared folder
+      NODE_TOKEN=$(cat /vagrant/shared/node-token)
+
+      # Install k3s agent and join the cluster
+      curl -sfL https://get.k3s.io | K3S_URL="https://192.168.56.110:6443" K3S_TOKEN="${NODE_TOKEN}" sh -
+    SHELL
+  end
+
+end
+
+
+
+
+# get vagrant info -> $> vagrant ssh-config
+# ssh -i /path/to/vagrant/insecure_private_key -p 2222 vagrant@127.0.0.1
+# ssh -i /path/to/vagrant/insecure_private_key -p 2200 vagrant@127.0.0.1
