@@ -1,7 +1,4 @@
 Vagrant.configure("2") do |config|
-  # Nom de la VM dans VirtualBox
-  config.vm.define "naaliS"
-
   # Utilisation de la dernière version stable de Debian 12 (Bookworm)
   config.vm.box = "debian/bookworm64"
 
@@ -12,41 +9,60 @@ Vagrant.configure("2") do |config|
   config.vm.provider "virtualbox" do |vb|
     vb.gui = false
     vb.customize ["modifyvm", :id, "--nested-hw-virt", "off"]
+    vb.customize ["modifyvm", :id, "--cableconnected1", "on"] # prevent ssh timeout
     vb.name = "naaliS"
-    vb.memory = 1024
+    vb.memory = 2048
     vb.cpus = 2
   end
 
   # Provision avec un script shell pour installer K3s et déployer les applications
   config.vm.provision "shell", inline: <<-SHELL
-    # Mise à jour des paquets et installation de curl
-    apt-get update
-    apt-get install -y curl
+# Update system packages
+    sudo apt-get update -y
+    sudo apt-get upgrade -y
 
-    # Installation de K3s (Kubernetes léger)
-    curl -sfL https://get.k3s.io | sh -
+    # Install Docker (required by k3s for container runtime)
+    sudo apt-get install -y docker.io curl
+    sudo systemctl start docker
+    sudo systemctl enable docker
 
-    # Attendre que K3s soit opérationnel
-    sleep 30
+    # Install k3s (lightweight Kubernetes)
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--docker" sh -
 
-    # Importer les images Docker pour app1, app2, app3 dans containerd
-    sudo ctr images import /vagrant/app1/app1-nginx.tar
-    sudo ctr images import /vagrant/app2/app2-nginx.tar
-    sudo ctr images import /vagrant/app3/app3-nginx.tar
+    # k3s installs kubectl as a symlink to k3s-kubectl, no need to install separately
+    # Create a kubeconfig for the vagrant user
+    mkdir -p /home/vagrant/.kube
+    sudo cp /etc/rancher/k3s/k3s.yaml /home/vagrant/.kube/config
+    sudo chown vagrant:vagrant /home/vagrant/.kube/config
+    sudo chmod 644 /home/vagrant/.kube/config
+    sudo chmod 644 /etc/rancher/k3s/k3s.yaml
 
-    # Appliquer les fichiers de déploiement et de service pour chaque application
+    # Build Docker images for app1, app2, and app3
+    cd /vagrant/app1
+    sudo docker build -t app1-nginx .
+
+    cd /vagrant/app2
+    sudo docker build -t app2-nginx .
+
+    cd /vagrant/app3
+    sudo docker build -t app3-nginx .
+
+    # Apply Kubernetes manifests for app1, app2, and app3 using k3s' kubectl
     kubectl apply -f /vagrant/app1/app1-deployment.yaml
     kubectl apply -f /vagrant/app1/app1-service.yaml
+
     kubectl apply -f /vagrant/app2/app2-deployment.yaml
     kubectl apply -f /vagrant/app2/app2-service.yaml
+
     kubectl apply -f /vagrant/app3/app3-deployment.yaml
     kubectl apply -f /vagrant/app3/app3-service.yaml
 
-    # Appliquer le fichier Ingress pour configurer le routage des applications
+    # Optionally, apply ingress rules if necessary
     kubectl apply -f /vagrant/ingress.yaml
   SHELL
 
-  # Partage du dossier local contenant les images Docker et fichiers YAML avec la VM
-  config.vm.synced_folder ".", "/vagrant", type: "virtualbox"
+  # Sync the project directory (where Vagrantfile is located) to /vagrant in the VM
+  config.vm.synced_folder ".", "/vagrant"
+
 end
 
